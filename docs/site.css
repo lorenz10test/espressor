@@ -213,6 +213,11 @@ section{padding:110px 0}
 .part:hover{border-color:var(--line2);transform:translateX(4px)}
 .part .ic{width:72px;height:72px;border-radius:14px;background:radial-gradient(circle at 50% 40%,#2b1d15,#140d0a);border:1px solid var(--line);display:flex;align-items:center;justify-content:center}
 .part .ic svg{width:40px;height:40px}
+.part .ic.photo{overflow:hidden;padding:0}
+.part .ic.photo img{width:100%;height:100%;object-fit:cover}
+.pth{width:56px;height:42px;border-radius:8px;overflow:hidden;background:radial-gradient(circle at 50% 40%,#2b1d15,#140d0a);border:1px solid var(--line);display:flex;align-items:center;justify-content:center}
+.pth img{width:100%;height:100%;object-fit:cover}
+.pth svg{width:60%;height:60%}
 .part h3{font:400 19px var(--serif);margin:3px 0 5px}
 .part .sub{font-size:13.5px;color:var(--mute)}
 .part .end{text-align:right;display:grid;gap:8px;justify-items:end}

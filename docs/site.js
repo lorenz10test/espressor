@@ -121,9 +121,10 @@ function machineCard(m, d = '') {
       <h3>${esc(m.name)}</h3><p class="short">${esc(m.short)}</p>
       <div class="row">${sold ? '<span class="pr q">Vândut</span>' : priceHTML(m)}<span class="link">Detalii <span class="arrow">→</span></span></div></div></a>`;
 }
+const partThumb = p => p.img ? `<img src="${imgSrc(p.img)}" alt="${esc(p.name)}" loading="lazy">` : partIcon(p.cat);
 function partRow(p) {
   return `<a class="part" href="#/piese/${p.slug}">
-    <div class="ic">${partIcon(p.cat)}</div>
+    <div class="ic${p.img ? ' photo' : ''}">${partThumb(p)}</div>
     <div><div class="meta">${esc(p.cat)} · cod ${esc(p.code)}</div><h3>${esc(p.name)}</h3><div class="sub">Se potrivește la: ${esc(p.compat.join(', '))}</div></div>
     <div class="end">${priceHTML(p)}<span class="stock ${p.stock}">${stockLabel[p.stock]}</span></div></a>`;
 }
@@ -387,7 +388,7 @@ function pgPart([slug]) {
   const order = `Bună ziua! Aș vrea piesa: ${p.name} (cod ${p.code}, ${priceText(p)}). Aparatul meu este: `;
   return { title: p.name, html: `<div class="wrap">
     <nav class="crumbs" style="padding-top:34px" aria-label="Ești aici"><a href="#/">Acasă</a><span>/</span><a href="#/piese">Piese</a><span>/</span><a href="#/piese?cat=${encodeURIComponent(p.cat)}">${esc(p.cat)}</a></nav>
-    <div class="pd"><div class="main-img" style="display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 40%,#2b1d15,#0e0907)"><div style="width:45%">${partIcon(p.cat)}</div></div>
+    <div class="pd"><div>${p.img ? `<div class="main-img" id="zoom" title="Apasă pentru zoom"><img src="${imgSrc(p.img)}" alt="${esc(p.name)}"></div><p class="muted" style="font-size:13px;margin-top:10px">Apasă pe poză ca s-o mărești.</p>` : `<div class="main-img" style="display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 40%,#2b1d15,#0e0907)"><div style="width:45%">${partIcon(p.cat)}</div></div><p class="muted" style="font-size:13px;margin-top:10px">Vrei să vezi piesa? Îți trimitem poze pe WhatsApp.</p>`}</div>
       <div><div class="meta">${esc(p.cat)} · cod ${esc(p.code)}</div><h1>${esc(p.name)}</h1>
         <span class="stock ${p.stock}">${stockLabel[p.stock]}</span>${priceHTML(p)}<p class="muted" style="font-size:14px;margin:0">Preț cu TVA. Montajul îl putem face noi.</p>
         <div class="actions"><a class="btn btn-wa" href="${waLink(order)}" target="_blank" rel="noopener">${WA}${p.stock === 'epuizat' ? 'Anunță-mă când intră' : 'Comandă piesa'}</a><a class="btn btn-ghost" href="${telLink()}">Sună-ne</a></div>
@@ -395,7 +396,8 @@ function pgPart([slug]) {
           ${p.note ? `<p class="muted" style="margin:16px 0 0;line-height:1.7">${esc(p.note)}</p>` : ''}</div>
         <div class="box"><h3 style="font-size:22px;margin-bottom:6px">Nu ești sigur?</h3><p class="muted" style="margin:0 0 14px;line-height:1.7">Trimite-ne o poză cu piesa veche și eticheta aparatului. Îți spunem pe loc dacă e cea bună, ca să nu dai banii degeaba.</p>
           <a class="link" href="${waLink('Bună ziua! Nu sunt sigur ce piesă îmi trebuie. Vă trimit poze.')}" target="_blank" rel="noopener">Trimite poze pe WhatsApp <span class="arrow">→</span></a></div></div></div>
-    ${rel.length ? `<h2 style="font-size:34px;margin:0 0 24px">Din aceeași categorie</h2><div class="parts" style="padding-bottom:90px">${rel.map(partRow).join('')}</div>` : '<div style="height:60px"></div>'}</div>` };
+    ${rel.length ? `<h2 style="font-size:34px;margin:0 0 24px">Din aceeași categorie</h2><div class="parts" style="padding-bottom:90px">${rel.map(partRow).join('')}</div>` : '<div style="height:60px"></div>'}</div>`,
+    mount() { const z = $('#zoom'); if (z) z.onclick = () => z.classList.toggle('zoom'); } };
 }
 
 function pgService() {
@@ -522,9 +524,9 @@ function admDraw() {
     },
     piese() {
       P.innerHTML = admTop('Piese', 'Stocul și prețurile se schimbă direct din listă.', '<button class="btn btn-primary btn-sm" id="add">+ Adaugă</button>') +
-        `<input class="search" id="aq" placeholder="Caută în piese…" style="width:100%;margin-bottom:14px"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Piesă</th><th>Categorie</th><th>Preț (lei)</th><th>Stoc</th><th></th></tr></thead><tbody id="ptb"></tbody></table></div>`;
+        `<input class="search" id="aq" placeholder="Caută în piese…" style="width:100%;margin-bottom:14px"><div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Piesă</th><th>Categorie</th><th>Preț (lei)</th><th>Stoc</th><th></th></tr></thead><tbody id="ptb"></tbody></table></div>`;
       const draw = () => { const t = $('#aq').value.toLowerCase();
-        $('#ptb').innerHTML = DB.parts.map((p, i) => [p, i]).filter(([p]) => !t || (p.name + p.code).toLowerCase().includes(t)).map(([p, i]) => `<tr${p.status === 'ascuns' ? ' style="opacity:.5"' : ''}><td><b style="font-weight:500">${esc(p.name)}</b><div class="muted" style="font-size:12.5px">cod ${esc(p.code)}</div></td><td>${esc(p.cat)}</td>
+        $('#ptb').innerHTML = DB.parts.map((p, i) => [p, i]).filter(([p]) => !t || (p.name + p.code).toLowerCase().includes(t)).map(([p, i]) => `<tr${p.status === 'ascuns' ? ' style="opacity:.5"' : ''}><td><div class="th pth">${partThumb(p)}</div></td><td><b style="font-weight:500">${esc(p.name)}</b><div class="muted" style="font-size:12.5px">cod ${esc(p.code)}</div></td><td>${esc(p.cat)}</td>
           <td><input class="select" style="width:110px;border-radius:10px" type="number" min="0" value="${p.price ?? ''}" data-pr="${i}" aria-label="Preț ${esc(p.name)}"></td>
           <td><select class="select" data-st="${i}" aria-label="Stoc ${esc(p.name)}">${Object.entries(stockLabel).map(([k, l]) => `<option value="${k}" ${p.stock === k ? 'selected' : ''}>${l.split(',')[0]}</option>`).join('')}</select></td>
           <td style="white-space:nowrap"><button class="iconbtn" data-e="${i}">Modifică</button> <a class="iconbtn" href="#/piese/${p.slug}" target="_blank">Vezi</a></td></tr>`).join('');
@@ -657,7 +659,12 @@ function editMachine(i) {
 function editPart(i) {
   const isNew = i == null, p = isNew ? { name: '', code: '', cat: DB.partCats[0], compat: [], priceType: 'fix', price: '', stock: 'stoc', note: '', status: 'activ' } : clone(DB.parts[i]);
   sheet(`<div class="adm-top"><h1 style="font-size:30px">${isNew ? 'Piesă nouă' : 'Modifică piesa'}</h1><button class="iconbtn" data-close>Închide ✕</button></div>
-    <form id="pf" novalidate><div class="f"><label for="x-name">Nume *</label><input id="x-name" value="${esc(p.name)}"></div>
+    <form id="pf" novalidate>
+    <div class="f"><label>Poza piesei</label><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div id="x-prev" class="th pth" style="width:120px;height:90px;border-radius:10px">${partThumb(p)}</div>
+      <label class="btn btn-ghost btn-sm" style="cursor:pointer">${p.img ? 'Schimbă poza' : 'Adaugă o poză'}<input type="file" accept="image/*" id="x-img" hidden></label>
+      <button type="button" class="iconbtn" id="x-noimg" ${p.img ? '' : 'hidden'}>Scoate poza</button></div>
+      <p class="muted" style="font-size:12.5px;margin:8px 0 0">Fără poză, pe site apare iconița categoriei. Merge orice JPG sau PNG; o micșorăm automat.</p></div>
+    <div class="f"><label for="x-name">Nume *</label><input id="x-name" value="${esc(p.name)}"></div>
     <div class="f2"><div class="f"><label for="x-code">Cod piesă</label><input id="x-code" value="${esc(p.code)}"></div><div class="f"><label for="x-cat">Categorie</label>${sel('x-cat', DB.partCats.map(c => [c, c]), p.cat)}</div></div>
     <div class="f2"><div class="f"><label for="x-pt">Tip preț</label>${sel('x-pt', PT, p.priceType)}</div><div class="f"><label for="x-price">Preț (lei)</label><input id="x-price" type="number" min="0" value="${p.price ?? ''}"></div></div>
     <div class="f2"><div class="f"><label for="x-stock">Stoc</label>${sel('x-stock', Object.entries(stockLabel).map(([k, l]) => [k, l.split(',')[0]]), p.stock)}</div><div class="f"><label for="x-status">Pe site</label>${sel('x-status', [['activ', 'Vizibilă'], ['ascuns', 'Ascunsă']], p.status || 'activ')}</div></div>
@@ -667,6 +674,10 @@ function editPart(i) {
     <div style="display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;margin-top:10px"><button class="btn btn-primary">${isNew ? 'Adaugă pe site' : 'Salvează'}</button>${isNew ? '' : '<button type="button" class="iconbtn" id="x-del">Șterge definitiv</button>'}</div></form>`,
   (M, close) => {
     priceToggle(M);
+    const prev = $('#x-prev', M), noimg = $('#x-noimg', M);
+    $('#x-img', M).onchange = e => readImage(e.target, d => { p.img = d; prev.innerHTML = `<img src="${d}" alt="">`; noimg.hidden = false; });
+    noimg.onclick = () => { delete p.img; prev.innerHTML = partIcon($('#x-cat', M).value); noimg.hidden = true; };
+    $('#x-cat', M).onchange = e => { if (!p.img) prev.innerHTML = partIcon(e.target.value); };
     if (!isNew) $('#x-del', M).onclick = e => confirmBtn(e.target, () => { DB.parts.splice(i, 1); close(); admSaved('Piesă ștearsă.'); });
     $('#pf', M).onsubmit = e => {
       e.preventDefault(); const g = id => $('#' + id, M).value.trim(); const er = $('#x-err', M);
