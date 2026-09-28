@@ -1,5 +1,6 @@
 /* Date demo. În site-ul real vin din baza de date (Supabase) și se editează din admin. */
 window.DB_DEFAULT = {
+  version: 3,   // crește numărul când schimbi datele de mai jos: browserele încarcă din nou datele demo
   settings: {
     brand: 'Espressoare Premium',
     phone: '07XX XXX XXX',          // de completat

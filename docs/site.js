@@ -11,19 +11,28 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = n => Number(n).toLocaleString('ro-RO');
 const clone = o => JSON.parse(JSON.stringify(o));
-const slugify = s => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'item';
+const slugify = s => String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'item';
 const store = {
   get(k, area = localStorage) { try { return area.getItem(k); } catch { return null; } },
   set(k, v, area = localStorage) { try { area.setItem(k, v); return true; } catch { return false; } },
   del(k, area = localStorage) { try { area.removeItem(k); } catch {} }
 };
 
-let DB = (() => { const s = store.get(LS_DB); if (s) { try { return JSON.parse(s); } catch {} } return clone(window.DB_DEFAULT); })();
-function save() { if (!store.set(LS_DB, JSON.stringify(DB))) toast('Nu am putut salva. Poate poza e prea mare. Încearcă una mai mică.'); }
+let DB = (() => { const s = store.get(LS_DB); if (s) { try { const d = JSON.parse(s); if (d && d.version === window.DB_DEFAULT.version) return d; } catch {} } return clone(window.DB_DEFAULT); })();
+function save() { save.ok = store.set(LS_DB, JSON.stringify(DB)); if (!save.ok) toast('Nu am putut salva. Poate poza e prea mare. Încearcă una mai mică.'); return save.ok; }
+save.ok = true;
+(function migrate() {   // date salvate de o versiune mai veche a demo-ului: completăm ce lipsește
+  const D = window.DB_DEFAULT;
+  for (const k of Object.keys(D)) if (DB[k] == null) DB[k] = clone(D[k]);
+  for (const k of Object.keys(D.settings)) if (DB.settings[k] == null) DB.settings[k] = clone(D.settings[k]);
+  if (!Array.isArray(DB.admins) || !DB.admins.length) DB.admins = clone(D.admins);
+  DB.parts.forEach(p => { p.status = p.status || 'activ'; p.compat = p.compat || []; });
+  DB.machines.forEach(m => { m.status = m.status || 'activ'; m.specs = m.specs || []; m.checked = m.checked || []; });
+})();
 
 const imgSrc = s => !s ? '' : (s.startsWith('data:') || s.startsWith('http')) ? s : IMG + s;
 const waLink = t => `https://wa.me/${DB.settings.wa}?text=${encodeURIComponent(t)}`;
-const telLink = () => `tel:${DB.settings.tel}`;
+const telLink = () => 'tel:' + String(DB.settings.tel).replace(/[^\d+]/g, '');
 const WA = '<svg class="wa-ico" aria-hidden="true"><use href="#wa"/></svg>';
 const LOGO = '<svg aria-hidden="true"><use href="#logo"/></svg>';
 const active = arr => arr.filter(x => (x.status || 'activ') !== 'ascuns');
@@ -116,7 +125,7 @@ function toggleDrawer(open) {
 function machineCard(m, d = '') {
   const sold = m.status === 'vandut';
   return `<a class="prod rv ${d} ${sold ? 'sold' : ''}" href="#/espressoare/${m.slug}">
-    <div class="img"><img src="${imgSrc(m.img)}" alt="${esc(m.name)}" loading="lazy"><span class="tag">${esc(m.cond)}</span>${sold ? '<span class="tag sold">Vândut</span>' : ''}</div>
+    <div class="img">${m.img ? `<img src="${imgSrc(m.img)}" alt="${esc(m.name)}" loading="lazy">` : ""}<span class="tag">${esc(m.cond)}</span>${sold ? '<span class="tag sold">Vândut</span>' : ''}</div>
     <div class="body"><div class="meta">${typeLabel[m.type] || ''}${m.groups ? ` · ${m.groups} ${m.groups > 1 ? 'grupuri' : 'grup'}` : ''} · garanție ${esc(m.warranty)}</div>
       <h3>${esc(m.name)}</h3><p class="short">${esc(m.short)}</p>
       <div class="row">${sold ? '<span class="pr q">Vândut</span>' : priceHTML(m)}<span class="link">Detalii <span class="arrow">→</span></span></div></div></a>`;
@@ -130,7 +139,7 @@ function partRow(p) {
 }
 function priceRows(items) {
   return items.map(s => `<div class="price"><span class="n">${esc(s.name)}${s.note ? `<small>${esc(s.note)}</small>` : ''}</span><span class="dots"></span>${
-    s.priceType === 'cerere' ? '<span class="v q">la cerere</span>' : `<span class="v">${s.priceType === 'de-la' ? '<small>de la</small>' : ''}${fmt(s.price)} lei</span>`}</div>`).join('');
+    s.priceType === 'cerere' || s.price == null || s.price === '' ? '<span class="v q">la cerere</span>' : `<span class="v">${s.priceType === 'de-la' ? '<small>de la</small>' : ''}${fmt(s.price)} lei</span>`}</div>`).join('');
 }
 const waysHTML = () => `<div class="ways">
   <div class="way"><b>La atelier</b>Îl aduci tu, în ${esc(DB.settings.address.split(',').slice(-2).join(',').trim())}</div>
@@ -210,7 +219,7 @@ function mountDiag() {
     $$('.opt', o.parentNode).forEach(x => x.classList.toggle('sel', x === o)); ans[o.dataset.k] = o.dataset.v;
     if (o.closest('#s1')) { $('#otherWrap').hidden = !o.dataset.other; if (o.dataset.other) $('#fo').focus(); return; }
     if (o.dataset.r) { ans.r = o.dataset.r; vis.style.setProperty('--op', o.dataset.op); vis.style.setProperty('--sc', o.dataset.sc); tag.textContent = 'Zona: ' + o.dataset.v.toLowerCase(); }
-    setTimeout(() => go(cur + 1), 280);
+    if (root.dataset.busy) return; root.dataset.busy = 1; const next = cur + 1; setTimeout(() => { delete root.dataset.busy; go(next); }, 280);
   });
   $('#s1').onsubmit = e => {
     e.preventDefault(); const miss = [], e1 = $('#e1');
@@ -230,13 +239,14 @@ function mountDiag() {
 const HS = [['Carcasă din inox', '78%', '24%', '', '#/service'], ['Boiler și rezistență', '27%', '41%', 'l', '#/piese?cat=Rezisten%C8%9Be'],
   ['Grup de extracție', '66%', '56%', '', '#/piese?cat=Site%20de%20du%C8%99'], ['Garnituri și site', '35%', '64.5%', 'l', '#/piese?cat=Garnituri'],
   ['Portafiltre', '72%', '74%', '', '#/piese?cat=Portafiltre%20%C8%99i%20co%C8%99uri']];
+const catLink = href => { const m = href.match(/cat=(.+)$/); return !m || DB.partCats.includes(decodeURIComponent(m[1])) ? href : '#/piese'; };
 const explodeHTML = () => `<section class="explode" id="explode" aria-label="Aparatul desfăcut în piese"><div class="wrap stick">
   <div><div class="eyebrow">Îl știm pe dinăuntru</div><h2 style="margin-top:14px">Piesă cu piesă,<br><em>șurub cu șurub.</em></h2>
     <p class="lead" style="margin-top:18px">Știm ce se ascunde sub carcasă, de la garnitura de grup până la boiler. Derulează încet și apasă pe piese.</p>
     <ul class="steps-ex" id="exsteps">${HS.map((h, i) => `<li><span>${['i.', 'ii.', 'iii.', 'iv.', 'v.'][i]}</span>${h[0]}</li>`).join('')}</ul>
     <a class="btn btn-ghost" href="#/piese" style="margin-top:26px">Vezi toate piesele <span class="arrow">→</span></a></div>
   <div class="stage" id="stage"><div class="clip"><img class="s-a" src="${IMG}hero.jpg" alt=""><img class="s-b" src="${IMG}explode.jpg" alt="Espressor profesional desfăcut în piese"></div>
-    ${HS.map(h => `<a class="hs ${h[3]}" href="${h[4]}" style="--x:${h[1]};--y:${h[2]}"><i></i><span>${h[0]}</span></a>`).join('')}</div></div></section>`;
+    ${HS.map(h => `<a class="hs ${h[3]}" href="${catLink(h[4])}" style="--x:${h[1]};--y:${h[2]}"><i></i><span>${h[0]}</span></a>`).join('')}</div></div></section>`;
 function mountExplode() {
   const ex = $('#explode'); if (!ex) return;
   const stage = $('#stage'), hs = $$('.hs', stage), steps = $$('#exsteps li');
@@ -278,7 +288,7 @@ function pgHome() {
   <section style="padding-top:0"><div class="wrap split2">
     <div><div class="eyebrow rv">Prețuri</div><h2 class="rv d1" style="margin-top:14px">Clare,<br><em>fără surprize.</em></h2>
       <p class="lead rv d2" style="margin-top:18px">Afli costul înainte să ne apucăm de lucru. Dacă găsim altceva pe parcurs, te sunăm întâi.</p>${waysHTML()}</div>
-    <div class="rv d1">${priceRows([...DB.services[0].items.slice(0, 1), ...DB.services[1].items, ...DB.services[2].items.slice(4, 5)])}
+    <div class="rv d1">${priceRows(DB.services.flatMap(c => c.items).slice(0, 6))}
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:28px"><a class="btn btn-primary" href="#/reparatie">Cere o reparație <span class="arrow">→</span></a><a class="btn btn-ghost" href="#/service">Toate prețurile</a></div></div>
   </div></section>
   <section style="background:var(--bg2)"><div class="wrap">
@@ -338,7 +348,7 @@ function pgMachine([slug]) {
   const ask = `Bună ziua! Mă interesează: ${m.name} (${m.cond}, ${priceText(m)}). Mai este disponibil?`;
   return { title: m.name, html: `<div class="wrap">
     <nav class="crumbs" style="padding-top:34px" aria-label="Ești aici"><a href="#/">Acasă</a><span>/</span><a href="#/espressoare">Espressoare</a><span>/</span><span>${esc(m.name)}</span></nav>
-    <div class="pd"><div><div class="main-img" id="zoom" title="Apasă pentru zoom"><img src="${imgSrc(m.img)}" alt="${esc(m.name)}"><span class="tag">${esc(m.cond)}</span>${sold ? '<span class="tag sold">Vândut</span>' : ''}</div>
+    <div class="pd"><div><div class="main-img" id="zoom" title="Apasă pentru zoom">${m.img ? `<img src="${imgSrc(m.img)}" alt="${esc(m.name)}">` : ""}<span class="tag">${esc(m.cond)}</span>${sold ? '<span class="tag sold">Vândut</span>' : ''}</div>
       <p class="muted" style="font-size:13px;margin-top:10px">Apasă pe poză ca s-o mărești. Vrei mai multe poze sau un video? Ți le trimitem pe WhatsApp.</p></div>
       <div><div class="meta">${typeLabel[m.type] || ''}${m.groups ? ` · ${m.groups} ${m.groups > 1 ? 'grupuri' : 'grup'}` : ''}</div><h1>${esc(m.name)}</h1><p class="lead">${esc(m.short)}</p>
         ${sold ? '<span class="pr q" style="display:block;margin:18px 0 6px;font-size:28px">Acest aparat s-a vândut</span>' : priceHTML(m)}
@@ -368,12 +378,12 @@ function pgParts(_, q) {
         <a class="btn btn-wa" href="${waLink('Bună ziua! Caut o piesă pentru aparatul meu. Marca și modelul: ')}" target="_blank" rel="noopener">${WA}Caută-mi o piesă</a></div></div>`,
     mount() {
       const draw = () => {
-        const t = state.q.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-        const norm = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+        const t = state.q.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const norm = s => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         const list = active(DB.parts).filter(p => (state.cat === 'toate' || p.cat === state.cat) && (!state.stoc || p.stock === 'stoc') &&
           (!t || norm([p.name, p.code, p.cat, ...p.compat].join(' ')).includes(t)));
         $('#cnt').textContent = list.length === 1 ? '1 piesă' : list.length + ' piese';
-        $('#plist').innerHTML = list.length ? list.map(partRow).join('') : `<div class="empty"><h3>N-am găsit nimic după „${esc(state.q)}”.</h3><p>Încearcă alt cuvânt sau scrie-ne direct, probabil o avem.</p></div>`;
+        $('#plist').innerHTML = list.length ? list.map(partRow).join('') : `<div class="empty"><h3>${state.q ? `N-am găsit nimic după „${esc(state.q)}”.` : 'Nicio piesă aici, deocamdată.'}</h3><p>${state.q ? 'Încearcă alt cuvânt sau scrie-ne direct, probabil o avem.' : 'Scoate un filtru sau scrie-ne direct. Probabil o avem.'}</p></div>`;
       };
       $('#pc').onclick = e => { const b = e.target.closest('.chip'); if (!b) return; state.cat = b.dataset.v; $$('#pc .chip').forEach(x => x.classList.toggle('on', x === b)); draw(); };
       $('#pq').oninput = e => { state.q = e.target.value.trim(); draw(); };
@@ -464,228 +474,324 @@ const pgNotFound = () => ({ title: 'Pagina nu există', html: `<div class="wrap"
 
 /* ================================================================
    ADMIN (demo: date în localStorage, conturi în data.js)
+   Gândit întâi pentru telefon: bară de taburi jos, liste pe carduri,
+   formulare pe tot ecranul cu butonul de salvare mereu la vedere.
    ================================================================ */
-const ADM_TABS = [['panou', 'Panou'], ['espressoare', 'Espressoare'], ['piese', 'Piese'], ['servicii', 'Servicii și prețuri'], ['horeca', 'Pachete HoReCa'],
-  ['categorii', 'Categorii piese'], ['intrebari', 'Întrebări frecvente'], ['setari', 'Setări și contact'], ['utilizatori', 'Utilizatori']];
-let admTab = 'panou';
-const me = () => { const e = store.get(SS_ADMIN, sessionStorage); return e && DB.admins.find(a => a.email === e); };
+const ADM_TABS = [['panou', 'Panou', '◎'], ['espressoare', 'Espressoare', '☕'], ['piese', 'Piese', '⚙'], ['servicii', 'Prețuri service', '₤'], ['horeca', 'Pachete HoReCa', '⌂'],
+  ['categorii', 'Categorii piese', '≡'], ['intrebari', 'Întrebări frecvente', '?'], ['setari', 'Setări și contact', '☎'], ['utilizatori', 'Utilizatori', '☺']];
+const ADM_MAIN = ['panou', 'espressoare', 'piese', 'servicii'];
+const ADM_ICON = {
+  panou: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+  espressoare: '<path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17M8 3v3M12 3v3"/>',
+  piese: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1"/>',
+  servicii: '<path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+  horeca: '<path d="M3 10l2-6h14l2 6M4 10v10h16V10M3 10h18M9 20v-5h6v5"/>',
+  categorii: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  intrebari: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17h.01"/>',
+  setari: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
+  utilizatori: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 4a4 4 0 0 1 0 8M22 21a7 7 0 0 0-4-6.3"/>',
+  more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  site: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+  out: '<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 17l5-5-5-5M15 12H3"/>'
+};
+const aico = k => `<svg class="ai" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ADM_ICON[k] || ''}</svg>`;
+
+const SS_TAB = 'ep-admin-tab';
+let admTab = store.get(SS_TAB, sessionStorage) || 'panou';
+let admDirty = null;            // funcția de salvare a formularului curent, dacă are modificări nesalvate
+const me = () => { const e = store.get(SS_ADMIN, sessionStorage); return e && (DB.admins || []).find(a => a.email === e); };
+const STATUS_M = { activ: 'La vânzare', ascuns: 'Ascuns', vandut: 'Vândut' };
 
 function pgAdmin(_, q) {
   if (!me()) return { title: 'Admin', admin: true, html: `<div class="wrap"><form class="login" id="login" novalidate>
     <a class="logo" href="#/">${LOGO}ESPRESSOARE<span>premium</span></a><h1 style="font-size:34px;margin:26px 0 6px">Intră în admin</h1>
-    <p class="muted" style="margin:0 0 22px;font-size:14.5px">Doar pentru echipă. Contul de demo e trecut în README.</p>
-    <div class="f"><label for="le">Email</label><input id="le" type="email" autocomplete="username" required></div>
+    <p class="muted" style="margin:0 0 22px;font-size:15px">Doar pentru echipă. Contul de demo e trecut în README.</p>
+    <div class="f"><label for="le">Email</label><input id="le" type="email" inputmode="email" autocomplete="username" autocapitalize="off" spellcheck="false" required></div>
     <div class="f"><label for="lp">Parola</label><input id="lp" type="password" autocomplete="current-password" required></div>
     <p class="err" id="lerr" hidden>Emailul sau parola nu se potrivesc.</p>
-    <button class="btn btn-primary btn-block">Intră</button><a class="link" href="#/" style="margin-top:18px">← Înapoi pe site</a></form></div>`,
-    mount() { $('#login').onsubmit = e => { e.preventDefault(); const a = DB.admins.find(x => x.email.toLowerCase() === $('#le').value.trim().toLowerCase() && x.pass === $('#lp').value);
-      if (!a) { $('#lerr').hidden = false; return; } store.set(SS_ADMIN, a.email, sessionStorage); render(); }; } };
-  admTab = q.get('t') || admTab;
-  return { title: 'Admin', admin: true, html: `<div class="adm"><aside aria-label="Meniu admin">
-      <div style="padding:6px 14px 16px" class="hide-m"><div class="eyebrow">Admin</div><div class="muted" style="font-size:13.5px;margin-top:6px">Salut, ${esc(me().name)}</div></div>
-      ${ADM_TABS.map(t => `<button data-t="${t[0]}" class="${admTab === t[0] ? 'on' : ''}">${t[1]}</button>`).join('')}
-      <button id="logout" style="margin-top:auto">Ieși din cont</button></aside><div class="pane" id="pane"></div></div>`,
-    mount() { $$('.adm aside [data-t]').forEach(b => b.onclick = () => { admTab = b.dataset.t; $$('.adm aside [data-t]').forEach(x => x.classList.toggle('on', x === b)); admDraw(); });
-      $('#logout').onclick = () => { store.del(SS_ADMIN, sessionStorage); toast('Ai ieșit din cont.'); render(); }; admDraw(); } };
+    <button class="btn btn-primary btn-block">Intră</button><a class="link" href="#/" style="margin-top:20px">← Înapoi pe site</a></form></div>`,
+    mount() { $('#login').onsubmit = e => { e.preventDefault(); const a = (DB.admins || []).find(x => x.email.toLowerCase() === $('#le').value.trim().toLowerCase() && x.pass === $('#lp').value);
+      if (!a) { $('#lerr').hidden = false; $('#lp').value = ''; $('#lp').focus(); return; } store.set(SS_ADMIN, a.email, sessionStorage); render(); }; } };
+  if (q.get('t') && ADM_TABS.some(t => t[0] === q.get('t'))) admTab = q.get('t');
+  const btn = t => `<button type="button" data-t="${t[0]}">${aico(t[0])}<span>${t[1]}</span></button>`;
+  return { title: 'Admin', admin: true, html: `<div class="adm">
+    <header class="adm-bar"><a class="logo" href="#/" aria-label="Înapoi pe site">${LOGO}<span class="hide-xs">ESPRESSOARE</span><span>admin</span></a>
+      <div class="adm-bar-r"><a class="btn btn-ghost btn-sm" href="#/" target="_blank" rel="noopener">Vezi site-ul ↗</a><button type="button" class="iconbtn" id="logout">Ieși</button></div></header>
+    <div class="adm-body">
+      <aside class="adm-side" aria-label="Meniu admin"><div class="muted" style="font-size:14px;padding:4px 14px 14px">Salut, ${esc(me().name)}</div>${ADM_TABS.map(btn).join('')}</aside>
+      <div class="pane" id="pane"></div></div>
+    <nav class="adm-tabs" aria-label="Meniu admin">${ADM_TABS.filter(t => ADM_MAIN.includes(t[0])).map(t => btn([t[0], t[1].split(' ')[0], t[2]])).join('')}
+      <button type="button" id="more">${aico('more')}<span>Mai mult</span></button></nav></div>`,
+    mount() {
+      $$('.adm [data-t]').forEach(b => b.onclick = () => setTab(b.dataset.t));
+      $('#logout').onclick = () => { if (!leaveOk()) return; store.del(SS_ADMIN, sessionStorage); toast('Ai ieșit din cont.'); render(); };
+      $('#more').onclick = () => sheet({ title: 'Mai mult', body: `<div class="more-list">${ADM_TABS.filter(t => !ADM_MAIN.includes(t[0])).map(t => `<button type="button" class="more-item" data-mt="${t[0]}">${aico(t[0])}${t[1]}<span class="arrow">→</span></button>`).join('')}
+          <a class="more-item" href="#/" target="_blank" rel="noopener">${aico('site')}Vezi site-ul<span class="arrow">→</span></a>
+          <button type="button" class="more-item" data-out="1">${aico('out')}Ieși din cont<span class="arrow">→</span></button></div>`, bottom: true },
+        (M, close) => { $$('[data-mt]', M).forEach(b => b.onclick = () => { close(); setTab(b.dataset.mt); }); $('[data-out]', M).onclick = () => { close(); $('#logout').click(); }; });
+      setTab(admTab, true);
+    } };
 }
-function admSaved(msg = 'Salvat. Schimbarea se vede deja pe site.') { save(); renderChrome(); toast(msg); admDraw(); }
-function admTop(title, sub, btn = '') { return `<div class="adm-top"><div><h1>${title}</h1>${sub ? `<p class="muted" style="margin:6px 0 0">${sub}</p>` : ''}</div><div style="display:flex;gap:8px;flex-wrap:wrap">${btn}</div></div>`; }
+function leaveOk() {                 // salvează automat formularul curent înainte să pleci din el
+  if (!admDirty) return true;
+  const ok = admDirty(); if (ok) { admDirty = null; toast('Am salvat modificările.'); } return ok;
+}
+function setTab(t, first) {
+  if (!first && !leaveOk()) return;
+  admTab = ADM_TABS.some(x => x[0] === t) ? t : 'panou'; store.set(SS_TAB, admTab, sessionStorage);
+  $$('.adm [data-t]').forEach(b => { const on = b.dataset.t === admTab; b.classList.toggle('on', on); on ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'); });
+  $('#more')?.classList.toggle('on', !ADM_MAIN.includes(admTab));
+  admDraw(); if (!first) scrollTo(0, 0);
+}
+function admSaved(msg = 'Salvat. Schimbarea se vede deja pe site.') { admDirty = null; const ok = save(); renderChrome(); if (ok) toast(msg); admDraw(); }
+function admTop(title, sub, btn = '') { return `<div class="adm-top"><div class="adm-title"><h1>${title}</h1>${sub ? `<p class="muted">${sub}</p>` : ''}</div>${btn ? `<div class="adm-actions">${btn}</div>` : ''}</div>`; }
+function trackDirty(root, saveFn) {  // marchează formularul ca modificat la prima tastare
+  const sv = $('#sv', root);
+  root.addEventListener('input', () => { admDirty = saveFn; sv?.classList.add('pulse'); });
+}
 function confirmBtn(btn, onYes) {  // confirmare în pagină, fără dialog de browser
-  if (btn.dataset.armed) { onYes(); return; }
-  btn.dataset.armed = 1; const old = btn.textContent; btn.textContent = 'Sigur? Apasă iar'; btn.style.borderColor = '#f08a84'; btn.style.color = '#f08a84';
-  setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = old; btn.style.cssText = ''; } }, 3000);
+  if (btn.dataset.armed) { if (Date.now() - btn.dataset.armed > 400) onYes(); return; }
+  btn.dataset.armed = Date.now(); const old = btn.innerHTML; btn.textContent = 'Sigur? Apasă iar'; btn.classList.add('armed');
+  setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.innerHTML = old; btn.classList.remove('armed'); } }, 3500);
 }
+const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null; };
+
 function admDraw() {
-  const P = $('#pane'); if (!P) return;
+  const P = $('#pane'); if (!P) return; admDirty = null;
   const V = {
     panou() {
       const ms = DB.machines, ps = DB.parts;
-      P.innerHTML = admTop('Panou', 'Ce se întâmplă pe site, pe scurt.', '<a class="btn btn-ghost btn-sm" href="#/" target="_blank">Vezi site-ul ↗</a>') +
-        `<div class="grid4" style="margin-bottom:26px"><div class="stat"><b>${ms.filter(m => m.status === 'activ').length}</b>espressoare la vânzare</div><div class="stat"><b>${ms.filter(m => m.status === 'vandut').length}</b>vândute</div>
-        <div class="stat"><b>${ps.filter(p => p.stock === 'stoc').length}</b>piese pe stoc</div><div class="stat"><b>${ps.filter(p => p.stock === 'epuizat').length}</b>piese epuizate</div></div>
-        <div class="cgrid"><div class="cbox"><h3>Acțiuni rapide</h3><div style="display:grid;gap:10px;margin-top:10px">
-          <button class="btn btn-primary" data-go="espressoare" data-new="1">+ Adaugă un espressor</button><button class="btn btn-ghost" data-go="piese" data-new="1">+ Adaugă o piesă</button>
-          <button class="btn btn-ghost" data-go="servicii">Schimbă prețurile la service</button></div></div>
-        <div class="cbox"><h3>Date demo</h3><p class="muted" style="line-height:1.7">În prototip, tot ce schimbi aici se salvează doar în browserul tău. În site-ul final datele stau în baza de date și le vede toată lumea.</p>
-          <button class="iconbtn" id="reset">Readu datele demo la început</button></div></div>`;
-      $$('[data-go]', P).forEach(b => b.onclick = () => { admTab = b.dataset.go; $$('.adm aside [data-t]').forEach(x => x.classList.toggle('on', x.dataset.t === admTab)); admDraw(); if (b.dataset.new) (admTab === 'piese' ? editPart : editMachine)(null); });
-      $('#reset').onclick = e => confirmBtn(e.target, () => { DB = clone(window.DB_DEFAULT); store.del(LS_DB); renderChrome(); toast('Datele demo au fost resetate.'); admDraw(); });
+      P.innerHTML = admTop('Panou', `Salut, ${esc(me().name)}. Ce se întâmplă pe site, pe scurt.`) +
+        `<div class="stats"><button type="button" class="stat" data-go="espressoare"><b>${ms.filter(m => m.status === 'activ').length}</b>espressoare la vânzare</button><button type="button" class="stat" data-go="espressoare"><b>${ms.filter(m => m.status === 'vandut').length}</b>vândute</button>
+        <button type="button" class="stat" data-go="piese"><b>${ps.filter(p => p.stock === 'stoc').length}</b>piese pe stoc</button><button type="button" class="stat" data-go="piese"><b>${ps.filter(p => p.stock === 'epuizat').length}</b>piese epuizate</button></div>
+        <div class="cgrid"><div class="cbox"><h3>Acțiuni rapide</h3><div class="qa">
+          <button type="button" class="btn btn-primary" data-go="espressoare" data-new="1">+ Adaugă un espressor</button><button type="button" class="btn btn-ghost" data-go="piese" data-new="1">+ Adaugă o piesă</button>
+          <button type="button" class="btn btn-ghost" data-go="servicii">Schimbă prețurile la service</button><button type="button" class="btn btn-ghost" data-go="setari">Telefon, WhatsApp, program</button></div></div>
+        <div class="cbox"><h3>Despre datele demo</h3><p class="muted" style="line-height:1.7">În prototip, tot ce schimbi aici se salvează doar în browserul tău. În site-ul final, datele stau în baza de date și le vede toată lumea.</p>
+          <button type="button" class="iconbtn" id="reset">Readu datele demo la început</button></div></div>`;
+      $$('[data-go]', P).forEach(b => b.onclick = () => { setTab(b.dataset.go); if (b.dataset.new) (b.dataset.go === 'piese' ? editPart : editMachine)(null); });
+      $('#reset').onclick = e => confirmBtn(e.currentTarget, () => { DB = clone(window.DB_DEFAULT); store.del(LS_DB); if (!me()) { store.set(SS_ADMIN, DB.admins[0].email, sessionStorage); } renderChrome(); toast('Datele demo au fost resetate.'); admDraw(); });
     },
     espressoare() {
-      P.innerHTML = admTop('Espressoare', 'Adaugă, modifică, ascunde sau marchează ca vândut.', '<button class="btn btn-primary btn-sm" id="add">+ Adaugă</button>') +
-        `<div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Aparat</th><th>Preț</th><th>Stare</th><th>Status</th><th></th></tr></thead><tbody>${DB.machines.map((m, i) => `<tr>
-          <td><img class="th" src="${imgSrc(m.img)}" alt=""></td><td><b style="font-weight:500">${esc(m.name)}</b><div class="muted" style="font-size:12.5px">${typeLabel[m.type] || ''}</div></td>
-          <td>${esc(priceText(m))}</td><td>${esc(m.cond)}</td><td><span class="pill ${m.status}">${{ activ: 'La vânzare', ascuns: 'Ascuns', vandut: 'Vândut' }[m.status]}</span></td>
-          <td style="white-space:nowrap"><button class="iconbtn" data-e="${i}">Modifică</button> ${m.status !== 'vandut' ? `<button class="iconbtn" data-s="${i}">Vândut</button>` : `<button class="iconbtn" data-a="${i}">Reactivează</button>`} <a class="iconbtn" href="#/espressoare/${m.slug}" target="_blank">Vezi</a></td></tr>`).join('')}</tbody></table></div>`;
+      P.innerHTML = admTop('Espressoare', 'Apasă pe un aparat ca să-l modifici.', '<button type="button" class="btn btn-primary btn-sm" id="add">+ Adaugă</button>') +
+        (DB.machines.length ? `<div class="alist">${DB.machines.map((m, i) => `<div class="arow">
+          <button type="button" class="arow-main" data-e="${i}">${m.img ? `<img class="th" src="${imgSrc(m.img)}" alt="">` : `<span class="th pth">${partIcon("")}</span>`}<span class="ainfo"><b>${esc(m.name)}</b><small>${typeLabel[m.type] || ''} · ${esc(m.cond)} · ${esc(priceText(m))}</small></span></button>
+          <span class="pill ${m.status}">${STATUS_M[m.status] || m.status}</span>
+          <div class="aact">${m.status === 'vandut' ? `<button type="button" class="iconbtn" data-a="${i}">Pune din nou la vânzare</button>` : `<button type="button" class="iconbtn" data-s="${i}">Marchează vândut</button>`}
+            <a class="iconbtn" href="#/espressoare/${esc(m.slug)}" target="_blank" rel="noopener">${m.status === 'ascuns' ? 'Ascuns pe site' : 'Vezi pe site ↗'}</a></div></div>`).join('')}</div>`
+          : '<div class="empty"><h3>Nu ai niciun espressor.</h3><p>Apasă „+ Adaugă” ca să pui primul aparat pe site.</p></div>');
       $('#add').onclick = () => editMachine(null);
       $$('[data-e]', P).forEach(b => b.onclick = () => editMachine(+b.dataset.e));
       $$('[data-s]', P).forEach(b => b.onclick = () => { DB.machines[+b.dataset.s].status = 'vandut'; admSaved('Marcat ca vândut. Pe site apare cu eticheta „Vândut”.'); });
       $$('[data-a]', P).forEach(b => b.onclick = () => { DB.machines[+b.dataset.a].status = 'activ'; admSaved('Aparatul e din nou la vânzare.'); });
     },
     piese() {
-      P.innerHTML = admTop('Piese', 'Stocul și prețurile se schimbă direct din listă.', '<button class="btn btn-primary btn-sm" id="add">+ Adaugă</button>') +
-        `<input class="search" id="aq" placeholder="Caută în piese…" style="width:100%;margin-bottom:14px"><div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Piesă</th><th>Categorie</th><th>Preț (lei)</th><th>Stoc</th><th></th></tr></thead><tbody id="ptb"></tbody></table></div>`;
-      const draw = () => { const t = $('#aq').value.toLowerCase();
-        $('#ptb').innerHTML = DB.parts.map((p, i) => [p, i]).filter(([p]) => !t || (p.name + p.code).toLowerCase().includes(t)).map(([p, i]) => `<tr${p.status === 'ascuns' ? ' style="opacity:.5"' : ''}><td><div class="th pth">${partThumb(p)}</div></td><td><b style="font-weight:500">${esc(p.name)}</b><div class="muted" style="font-size:12.5px">cod ${esc(p.code)}</div></td><td>${esc(p.cat)}</td>
-          <td><input class="select" style="width:110px;border-radius:10px" type="number" min="0" value="${p.price ?? ''}" data-pr="${i}" aria-label="Preț ${esc(p.name)}"></td>
-          <td><select class="select" data-st="${i}" aria-label="Stoc ${esc(p.name)}">${Object.entries(stockLabel).map(([k, l]) => `<option value="${k}" ${p.stock === k ? 'selected' : ''}>${l.split(',')[0]}</option>`).join('')}</select></td>
-          <td style="white-space:nowrap"><button class="iconbtn" data-e="${i}">Modifică</button> <a class="iconbtn" href="#/piese/${p.slug}" target="_blank">Vezi</a></td></tr>`).join('');
+      P.innerHTML = admTop('Piese', 'Prețul și stocul le schimbi direct din listă. Pentru restul, apasă pe piesă.', '<button type="button" class="btn btn-primary btn-sm" id="add">+ Adaugă</button>') +
+        `<label class="sr" for="aq">Caută în piese</label><input class="search" id="aq" type="search" placeholder="Caută după nume sau cod…" autocomplete="off" style="width:100%;margin-bottom:14px"><div class="alist" id="plist"></div>`;
+      const norm = s => String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const draw = () => { const t = norm($('#aq').value.trim());
+        const rows = DB.parts.map((p, i) => [p, i]).filter(([p]) => !t || norm(p.name + ' ' + p.code).includes(t));
+        $('#plist').innerHTML = rows.length ? rows.map(([p, i]) => `<div class="arow part-row${p.status === 'ascuns' ? ' dim' : ''}">
+          <button type="button" class="arow-main" data-e="${i}"><span class="th pth">${partThumb(p)}</span><span class="ainfo"><b>${esc(p.name)}</b><small>${esc(p.cat)} · cod ${esc(p.code || '—')}${p.status === 'ascuns' ? ' · ascunsă' : ''}</small></span></button>
+          <div class="aedit"><label><span>Preț (lei)</span><input type="text" inputmode="decimal" value="${p.priceType === 'cerere' || p.price == null ? '' : p.price}" placeholder="la cerere" data-pr="${i}"></label>
+            <label><span>Stoc</span><select data-st="${i}">${Object.entries(stockLabel).map(([k, l]) => `<option value="${k}" ${p.stock === k ? 'selected' : ''}>${l.split(',')[0]}</option>`).join('')}</select></label></div></div>`).join('')
+          : `<div class="empty"><h3>Nicio piesă găsită.</h3><p>Încearcă alt cuvânt sau adaugă piesa.</p></div>`;
         $$('[data-e]', P).forEach(b => b.onclick = () => editPart(+b.dataset.e));
-        $$('[data-pr]', P).forEach(inp => inp.onchange = () => { const p = DB.parts[+inp.dataset.pr]; p.price = inp.value === '' ? null : +inp.value; if (p.price == null) p.priceType = 'cerere'; save(); toast('Preț actualizat.'); });
-        $$('[data-st]', P).forEach(s => s.onchange = () => { DB.parts[+s.dataset.st].stock = s.value; save(); toast('Stoc actualizat.'); }); };
+        $$('[data-pr]', P).forEach(inp => inp.onchange = () => { const p = DB.parts[+inp.dataset.pr], v = inp.value.trim();
+          if (v === '') { p.price = null; p.priceType = 'cerere'; } else { const n = num(v); if (n == null || n === 0) { toast('Scrie un preț valid, de exemplu 180.'); inp.value = p.price ?? ''; return; } p.price = n; if (p.priceType === 'cerere') p.priceType = 'fix'; }
+          if (save()) toast(v === '' ? 'Piesa are acum „preț la cerere”.' : 'Preț actualizat: ' + priceText(p) + '.'); });
+        $$('[data-st]', P).forEach(s => s.onchange = () => { DB.parts[+s.dataset.st].stock = s.value; if (save()) toast('Stoc actualizat: ' + stockLabel[s.value].split(',')[0].toLowerCase() + '.'); }); };
       $('#aq').oninput = draw; $('#add').onclick = () => editPart(null); draw();
     },
     servicii() {
-      P.innerHTML = admTop('Servicii și prețuri', 'Lista de prețuri de pe pagina Service. Scrie direct în câmpuri, apoi salvează.', '<button class="btn btn-primary btn-sm" id="sv">Salvează</button>') +
-        DB.services.map((c, ci) => `<div class="cbox" style="margin-bottom:16px"><div class="f" style="max-width:420px"><label>Categoria</label><input data-cat="${ci}" value="${esc(c.cat)}"></div>
-          ${c.items.map((s, si) => `<div class="f2" style="grid-template-columns:2fr 2fr 1fr 1fr auto;align-items:end;gap:8px;margin-bottom:6px">
-            <div class="f" style="margin:0"><label>Serviciu</label><input data-n="${ci}.${si}" value="${esc(s.name)}"></div><div class="f" style="margin:0"><label>Notă mică</label><input data-no="${ci}.${si}" value="${esc(s.note || '')}"></div>
-            <div class="f" style="margin:0"><label>Tip preț</label><select data-t="${ci}.${si}"><option value="fix" ${s.priceType === 'fix' ? 'selected' : ''}>fix</option><option value="de-la" ${s.priceType === 'de-la' ? 'selected' : ''}>de la</option><option value="cerere" ${s.priceType === 'cerere' ? 'selected' : ''}>la cerere</option></select></div>
-            <div class="f" style="margin:0"><label>Lei</label><input type="number" min="0" data-p="${ci}.${si}" value="${s.price ?? ''}"></div>
-            <button class="iconbtn" data-del="${ci}.${si}" style="margin-bottom:6px" aria-label="Șterge">✕</button></div>`).join('')}
-          <button class="iconbtn" data-addi="${ci}" style="margin-top:8px">+ Adaugă serviciu</button> <button class="iconbtn" data-delc="${ci}">Șterge categoria</button></div>`).join('') +
-        '<button class="btn btn-ghost btn-sm" id="addc">+ Categorie nouă</button>';
-      const collect = () => { $$('[data-cat]', P).forEach(i => DB.services[+i.dataset.cat].cat = i.value.trim());
-        const g = k => k.split('.').map(Number), it = k => { const [a, b] = g(k); return DB.services[a].items[b]; };
-        $$('[data-n]', P).forEach(i => it(i.dataset.n).name = i.value.trim()); $$('[data-no]', P).forEach(i => it(i.dataset.no).note = i.value.trim());
-        $$('select[data-t]', P).forEach(i => it(i.dataset.t).priceType = i.value); $$('[data-p]', P).forEach(i => it(i.dataset.p).price = i.value === '' ? null : +i.value); };
-      $('#sv').onclick = () => { collect(); admSaved(); };
-      $$('[data-addi]', P).forEach(b => b.onclick = () => { collect(); DB.services[+b.dataset.addi].items.push({ name: 'Serviciu nou', priceType: 'de-la', price: 100 }); save(); admDraw(); });
-      $$('[data-del]', P).forEach(b => b.onclick = () => confirmBtn(b, () => { collect(); const [a, c] = b.dataset.del.split('.').map(Number); DB.services[a].items.splice(c, 1); admSaved('Serviciu șters.'); }));
-      $$('[data-delc]', P).forEach(b => b.onclick = () => confirmBtn(b, () => { collect(); DB.services.splice(+b.dataset.delc, 1); admSaved('Categorie ștearsă.'); }));
-      $('#addc').onclick = () => { collect(); DB.services.push({ cat: 'Categorie nouă', items: [{ name: 'Serviciu nou', priceType: 'de-la', price: 100 }] }); save(); admDraw(); };
+      const opt = (v, cur, l) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
+      P.innerHTML = admTop('Prețuri service', 'Lista de prețuri de pe pagina Service.', '<button type="button" class="btn btn-primary btn-sm" id="sv">Salvează</button>') +
+        DB.services.map((c, ci) => `<div class="cbox svc-cat"><div class="f"><label for="c${ci}">Categoria</label><input id="c${ci}" data-cat="${ci}" value="${esc(c.cat)}"></div>
+          ${c.items.map((s, si) => `<div class="svc-item">
+            <div class="f sname"><label>Serviciu</label><input data-n="${ci}.${si}" value="${esc(s.name)}"></div>
+            <div class="f snote"><label>Notă mică <span class="muted">(opțional)</span></label><input data-no="${ci}.${si}" value="${esc(s.note || '')}"></div>
+            <div class="f"><label>Tip preț</label><select data-t="${ci}.${si}">${opt('fix', s.priceType, 'fix')}${opt('de-la', s.priceType, 'de la')}${opt('cerere', s.priceType, 'la cerere')}</select></div>
+            <div class="f"><label>Lei</label><input type="text" inputmode="decimal" data-p="${ci}.${si}" value="${s.price ?? ''}" ${s.priceType === 'cerere' ? 'disabled' : ''}></div>
+            <button type="button" class="iconbtn sdel" data-del="${ci}.${si}" aria-label="Șterge serviciul ${esc(s.name)}">Șterge</button></div>`).join('')}
+          <div class="row-btns"><button type="button" class="iconbtn" data-addi="${ci}">+ Adaugă serviciu</button><button type="button" class="iconbtn" data-delc="${ci}">Șterge categoria</button></div></div>`).join('') +
+        '<button type="button" class="btn btn-ghost btn-sm" id="addc">+ Categorie nouă</button>';
+      const it = k => { const [a, b] = k.split('.').map(Number); return DB.services[a].items[b]; };
+      const collect = () => {
+        for (const i of $$('[data-p]', P)) { const s = $(`[data-t="${i.dataset.p}"]`, P).value; if (s !== 'cerere' && !(num(i.value) > 0)) { i.classList.add('bad'); i.focus(); toast('Pune un preț sau alege „la cerere”.'); return false; } }
+        $$('[data-cat]', P).forEach(i => DB.services[+i.dataset.cat].cat = i.value.trim() || 'Fără nume');
+        $$('[data-n]', P).forEach(i => it(i.dataset.n).name = i.value.trim() || 'Serviciu'); $$('[data-no]', P).forEach(i => it(i.dataset.no).note = i.value.trim());
+        $$('select[data-t]', P).forEach(i => it(i.dataset.t).priceType = i.value); $$('[data-p]', P).forEach(i => { const s = it(i.dataset.p); s.price = s.priceType === 'cerere' ? null : num(i.value); });
+        save(); return true; };
+      $$('select[data-t]', P).forEach(s => s.onchange = () => { const p = $(`[data-p="${s.dataset.t}"]`, P); p.disabled = s.value === 'cerere'; if (p.disabled) p.value = ''; p.classList.remove('bad'); });
+      trackDirty(P, collect);
+      $('#sv').onclick = () => { if (collect()) admSaved(); };
+      $$('[data-addi]', P).forEach(b => b.onclick = () => { if (!collect()) return; DB.services[+b.dataset.addi].items.push({ name: 'Serviciu nou', priceType: 'de-la', price: 100 }); save(); admDraw(); toast('Am adăugat un rând nou. Completează-l și salvează.'); });
+      $$('[data-del]', P).forEach(b => b.onclick = () => confirmBtn(b, () => { if (!collect()) return; const [a, c] = b.dataset.del.split('.').map(Number); DB.services[a].items.splice(c, 1); admSaved('Serviciu șters.'); }));
+      $$('[data-delc]', P).forEach(b => b.onclick = () => confirmBtn(b, () => { if (!collect()) return; DB.services.splice(+b.dataset.delc, 1); admSaved('Categorie ștearsă.'); }));
+      $('#addc').onclick = () => { if (!collect()) return; DB.services.push({ cat: 'Categorie nouă', items: [{ name: 'Serviciu nou', priceType: 'de-la', price: 100 }] }); save(); admDraw(); };
     },
     horeca() {
-      P.innerHTML = admTop('Pachete HoReCa', 'Cele patru servicii pentru cafenele.', '<button class="btn btn-primary btn-sm" id="sv">Salvează</button>') +
-        DB.horeca.map((h, i) => `<div class="cbox" style="margin-bottom:14px"><div class="f2"><div class="f"><label>Titlu</label><input data-h="${i}.title" value="${esc(h.title)}"></div><div class="f"><label>Preț afișat</label><input data-h="${i}.price" value="${esc(h.price)}"></div></div>
-          <div class="f"><label>Descriere</label><textarea rows="3" data-h="${i}.text">${esc(h.text)}</textarea></div></div>`).join('');
-      $('#sv').onclick = () => { $$('[data-h]', P).forEach(x => { const [i, k] = x.dataset.h.split('.'); DB.horeca[+i][k] = x.value.trim(); }); admSaved(); };
+      P.innerHTML = admTop('Pachete HoReCa', 'Cele patru servicii pentru cafenele.', '<button type="button" class="btn btn-primary btn-sm" id="sv">Salvează</button>') +
+        DB.horeca.map((h, i) => `<div class="cbox" style="margin-bottom:14px"><div class="f2"><div class="f"><label for="h${i}t">Titlu</label><input id="h${i}t" data-h="${i}.title" value="${esc(h.title)}"></div><div class="f"><label for="h${i}p">Preț afișat</label><input id="h${i}p" data-h="${i}.price" value="${esc(h.price)}"></div></div>
+          <div class="f"><label for="h${i}x">Descriere</label><textarea id="h${i}x" rows="3" data-h="${i}.text">${esc(h.text)}</textarea></div></div>`).join('');
+      const collect = () => { $$('[data-h]', P).forEach(x => { const [i, k] = x.dataset.h.split('.'); DB.horeca[+i][k] = x.value.trim(); }); save(); return true; };
+      trackDirty(P, collect); $('#sv').onclick = () => { collect(); admSaved(); };
     },
     categorii() {
-      P.innerHTML = admTop('Categorii de piese', 'Apar ca filtre pe pagina Piese.') + `<div class="cbox">${DB.partCats.map((c, i) => { const n = DB.parts.filter(p => p.cat === c).length;
-        return `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><input class="select" style="flex:1;border-radius:12px" data-c="${i}" value="${esc(c)}"><span class="muted" style="font-size:13px;width:70px">${n} piese</span>
-          <button class="iconbtn" data-del="${i}" ${n ? 'disabled title="Mută întâi piesele în altă categorie" style="opacity:.4"' : ''}>Șterge</button></div>`; }).join('')}
-        <div style="display:flex;gap:8px;margin-top:16px"><input class="select" style="flex:1;border-radius:12px" id="nc" placeholder="Categorie nouă"><button class="btn btn-ghost btn-sm" id="addc">Adaugă</button><button class="btn btn-primary btn-sm" id="sv">Salvează</button></div></div>`;
-      $('#sv').onclick = () => { $$('[data-c]', P).forEach(i => { const old = DB.partCats[+i.dataset.c], nw = i.value.trim(); if (nw && nw !== old) { DB.parts.forEach(p => { if (p.cat === old) p.cat = nw; }); DB.partCats[+i.dataset.c] = nw; } }); admSaved(); };
-      $('#addc').onclick = () => { const v = $('#nc').value.trim(); if (!v) return; if (DB.partCats.includes(v)) return toast('Categoria există deja.'); DB.partCats.push(v); admSaved('Categorie adăugată.'); };
-      $$('[data-del]:not([disabled])', P).forEach(b => b.onclick = () => confirmBtn(b, () => { DB.partCats.splice(+b.dataset.del, 1); admSaved('Categorie ștearsă.'); }));
+      P.innerHTML = admTop('Categorii de piese', 'Apar ca filtre pe pagina Piese.', '<button type="button" class="btn btn-primary btn-sm" id="sv">Salvează</button>') + `<div class="cbox">${DB.partCats.map((c, i) => { const n = DB.parts.filter(p => p.cat === c).length;
+        return `<div class="cat-row"><label class="sr" for="cat${i}">Categoria ${i + 1}</label><input id="cat${i}" data-c="${i}" value="${esc(c)}"><span class="muted">${n === 1 ? '1 piesă' : n + ' piese'}</span>
+          ${n ? '<span class="muted hint">se poate șterge doar goală</span>' : `<button type="button" class="iconbtn" data-del="${i}">Șterge</button>`}</div>`; }).join('')}
+        <form class="cat-row" id="ncf" style="margin-top:16px"><label class="sr" for="nc">Categorie nouă</label><input id="nc" placeholder="Categorie nouă"><button class="btn btn-ghost btn-sm">Adaugă</button></form></div>`;
+      const collect = () => { const names = $$('[data-c]', P).map(i => i.value.trim());
+        if (names.some(n => !n)) { toast('O categorie nu poate rămâne fără nume.'); return false; }
+        if (new Set(names).size !== names.length) { toast('Două categorii au același nume.'); return false; }
+        names.forEach((nw, i) => { const old = DB.partCats[i]; if (nw !== old) { DB.parts.forEach(p => { if (p.cat === old) p.cat = nw; }); DB.partCats[i] = nw; } }); save(); return true; };
+      trackDirty($('.cbox', P), collect);
+      $('#sv').onclick = () => { if (collect()) admSaved(); };
+      $('#ncf').onsubmit = e => { e.preventDefault(); const v = $('#nc').value.trim(); if (!v) return toast('Scrie numele categoriei.'); if (!collect()) return; if (DB.partCats.includes(v)) return toast('Categoria există deja.'); DB.partCats.push(v); admSaved('Categorie adăugată.'); };
+      $$('[data-del]', P).forEach(b => b.onclick = () => confirmBtn(b, () => { if (!collect()) return; DB.partCats.splice(+b.dataset.del, 1); admSaved('Categorie ștearsă.'); }));
     },
     intrebari() {
-      P.innerHTML = admTop('Întrebări frecvente', 'Apar pe prima pagină și pe pagina Service.', '<button class="btn btn-ghost btn-sm" id="add">+ Întrebare</button><button class="btn btn-primary btn-sm" id="sv">Salvează</button>') +
-        DB.faq.map((f, i) => `<div class="cbox" style="margin-bottom:12px"><div class="f"><label>Întrebarea</label><input data-q="${i}" value="${esc(f[0])}"></div><div class="f"><label>Răspunsul</label><textarea rows="3" data-a="${i}">${esc(f[1])}</textarea></div><button class="iconbtn" data-del="${i}">Șterge</button></div>`).join('');
-      const collect = () => $$('[data-q]', P).forEach(i => { DB.faq[+i.dataset.q] = [i.value.trim(), $(`[data-a="${i.dataset.q}"]`, P).value.trim()]; });
+      P.innerHTML = admTop('Întrebări frecvente', 'Apar pe prima pagină și pe pagina Service.', '<button type="button" class="btn btn-primary btn-sm" id="sv">Salvează</button>') +
+        DB.faq.map((f, i) => `<div class="cbox" style="margin-bottom:12px"><div class="f"><label for="q${i}">Întrebarea</label><input id="q${i}" data-q="${i}" value="${esc(f[0])}"></div><div class="f"><label for="a${i}">Răspunsul</label><textarea id="a${i}" rows="3" data-a="${i}">${esc(f[1])}</textarea></div><button type="button" class="iconbtn" data-del="${i}">Șterge întrebarea</button></div>`).join('') +
+        '<button type="button" class="btn btn-ghost btn-sm" id="add">+ Întrebare nouă</button>';
+      const collect = () => { DB.faq = $$('[data-q]', P).map(i => [i.value.trim(), $(`[data-a="${i.dataset.q}"]`, P).value.trim()]).filter(f => f[0]); save(); return true; };
+      trackDirty(P, collect);
       $('#sv').onclick = () => { collect(); admSaved(); };
-      $('#add').onclick = () => { collect(); DB.faq.push(['Întrebare nouă', 'Răspunsul aici.']); save(); admDraw(); };
-      $$('[data-del]', P).forEach(b => b.onclick = () => confirmBtn(b, () => { collect(); DB.faq.splice(+b.dataset.del, 1); admSaved('Întrebare ștearsă.'); }));
+      $('#add').onclick = () => { collect(); DB.faq.push(['Întrebare nouă', 'Răspunsul aici.']); save(); admDraw(); $$('[data-q]', P).pop()?.select(); };
+      $$('[data-del]', P).forEach(b => b.onclick = () => confirmBtn(b, () => { const i = +b.dataset.del; collect(); DB.faq.splice(i, 1); admSaved('Întrebare ștearsă.'); }));
     },
     setari() {
-      const S = DB.settings, fld = (k, l, t = 'text') => `<div class="f"><label for="s-${k}">${l}</label><input id="s-${k}" type="${t}" data-s="${k}" value="${esc(S[k])}"></div>`;
-      P.innerHTML = admTop('Setări și contact', 'Numărul de WhatsApp, telefonul, adresa și programul apar pe tot site-ul.', '<button class="btn btn-primary btn-sm" id="sv">Salvează</button>') +
-        `<div class="cgrid"><div class="cbox"><h3>Contact</h3>${fld('phone', 'Telefon (cum apare pe site)')}${fld('tel', 'Telefon pentru apel (+40…)')}${fld('wa', 'Număr WhatsApp (40…, fără +)')}${fld('email', 'Email', 'email')}${fld('address', 'Adresa atelierului')}</div>
-        <div class="cbox"><h3>Program</h3>${S.hours.map((h, i) => `<div class="f2"><div class="f"><label>Zile</label><input data-hd="${i}" value="${esc(h[0])}"></div><div class="f"><label>Ore</label><input data-hh="${i}" value="${esc(h[1])}"></div></div>`).join('')}
+      const S = DB.settings, fld = (k, l, t = 'text', extra = '') => `<div class="f"><label for="s-${k}">${l}</label><input id="s-${k}" type="${t}" data-s="${k}" value="${esc(S[k])}" ${extra}></div>`;
+      P.innerHTML = admTop('Setări și contact', 'Apar pe tot site-ul: sus, jos și pe butoanele de WhatsApp.', '<button type="button" class="btn btn-primary btn-sm" id="sv">Salvează</button>') +
+        `<div class="cgrid"><div class="cbox"><h3>Contact</h3>${fld('phone', 'Telefon, cum apare pe site', 'tel')}${fld('tel', 'Telefon pentru apel (+40…)', 'tel')}${fld('wa', 'Număr WhatsApp (40…, fără +)', 'tel', 'inputmode="numeric"')}${fld('email', 'Email', 'email', 'autocapitalize="off"')}${fld('address', 'Adresa atelierului')}
+          <button type="button" class="link" id="watest" style="background:none;border:0;padding:0;cursor:pointer">Testează WhatsApp-ul ↗</button></div>
+        <div class="cbox"><h3>Program</h3>${S.hours.map((h, i) => `<div class="f2"><div class="f"><label for="hd${i}">Zile</label><input id="hd${i}" data-hd="${i}" value="${esc(h[0])}"></div><div class="f"><label for="hh${i}">Ore</label><input id="hh${i}" data-hh="${i}" value="${esc(h[1])}"></div></div>`).join('')}
           <h3 style="margin-top:18px">Firma</h3>${fld('company', 'Denumire')}${fld('cui', 'CUI')}${fld('regcom', 'Nr. Reg. Com.')}</div></div>`;
-      $('#sv').onclick = () => {
-        const wa = $('#s-wa').value.replace(/\D/g, ''); if (wa.length < 10) { toast('Numărul de WhatsApp pare incomplet. Scrie-l cu 40 în față.'); $('#s-wa').classList.add('bad'); return; }
-        $$('[data-s]', P).forEach(i => S[i.dataset.s] = i.value.trim()); S.wa = wa; S.hours = S.hours.map((h, i) => [$(`[data-hd="${i}"]`, P).value.trim(), $(`[data-hh="${i}"]`, P).value.trim()]); admSaved();
-      };
+      const collect = () => {
+        const wa = $('#s-wa').value.replace(/\D/g, ''), tel = $('#s-tel').value.replace(/[^\d+]/g, '');
+        $$('input.bad', P).forEach(i => i.classList.remove('bad'));
+        if (!/^40\d{9}$/.test(wa)) { $('#s-wa').classList.add('bad'); $('#s-wa').focus(); toast('Numărul de WhatsApp trebuie să arate așa: 40722123456.'); return false; }
+        if (!/^\+?\d{10,12}$/.test(tel)) { $('#s-tel').classList.add('bad'); $('#s-tel').focus(); toast('Telefonul pentru apel trebuie să arate așa: +40722123456.'); return false; }
+        $$('[data-s]', P).forEach(i => S[i.dataset.s] = i.value.trim()); S.wa = wa; S.tel = tel;
+        S.hours = S.hours.map((h, i) => [$(`[data-hd="${i}"]`, P).value.trim(), $(`[data-hh="${i}"]`, P).value.trim()]); save(); return true; };
+      trackDirty(P, collect);
+      $('#sv').onclick = () => { if (collect()) admSaved(); };
+      $('#watest').onclick = () => { const wa = $('#s-wa').value.replace(/\D/g, ''); open(`https://wa.me/${wa}?text=${encodeURIComponent('Test de pe site')}`, '_blank', 'noopener'); };
     },
     utilizatori() {
+      const self = me().email;
       P.innerHTML = admTop('Utilizatori', 'Cine are acces la admin. Toți au aceleași drepturi.') +
-        `<div class="tbl-wrap" style="margin-bottom:20px"><table class="tbl"><thead><tr><th>Nume</th><th>Email</th><th></th></tr></thead><tbody>${DB.admins.map((a, i) => `<tr><td>${esc(a.name)}${a.email === me().email ? ' <span class="pill activ">tu</span>' : ''}</td><td>${esc(a.email)}</td>
-          <td>${a.email === me().email || DB.admins.length < 2 ? '' : `<button class="iconbtn" data-del="${i}">Scoate accesul</button>`}</td></tr>`).join('')}</tbody></table></div>
-        <form class="cbox" id="nu" novalidate><h3>Adaugă o persoană</h3><div class="f2"><div class="f"><label for="un">Nume</label><input id="un"></div><div class="f"><label for="ue">Email</label><input id="ue" type="email"></div></div>
+        `<div class="alist" style="margin-bottom:20px">${DB.admins.map((a, i) => `<div class="arow"><span class="arow-main"><span class="avatar" aria-hidden="true">${esc(a.name.trim()[0] || '?').toUpperCase()}</span><span class="ainfo"><b>${esc(a.name)}${a.email === self ? ' <span class="pill activ">tu</span>' : ''}</b><small>${esc(a.email)}</small></span></span>
+          ${a.email === self ? '' : `<div class="aact"><button type="button" class="iconbtn" data-del="${i}">Scoate accesul</button></div>`}</div>`).join('')}</div>
+        <form class="cbox" id="nu" novalidate><h3>Adaugă o persoană</h3><div class="f2"><div class="f"><label for="un">Nume</label><input id="un" autocomplete="off"></div><div class="f"><label for="ue">Email</label><input id="ue" type="email" inputmode="email" autocapitalize="off" autocomplete="off"></div></div>
           <div class="f"><label for="up">Parolă (minim 8 caractere)</label><input id="up" type="password" autocomplete="new-password"></div><p class="err" id="uerr" hidden></p><button class="btn btn-primary btn-sm">Adaugă</button>
           <p class="muted" style="font-size:13px;margin:12px 0 0">În site-ul final, persoana primește un email de invitație și își alege singură parola.</p></form>`;
       $$('[data-del]', P).forEach(b => b.onclick = () => confirmBtn(b, () => { DB.admins.splice(+b.dataset.del, 1); admSaved('Accesul a fost scos.'); }));
       $('#nu').onsubmit = e => { e.preventDefault(); const n = $('#un').value.trim(), em = $('#ue').value.trim().toLowerCase(), pw = $('#up').value, er = $('#uerr');
-        const bad = !n ? 'Scrie numele.' : !/^\S+@\S+\.\S+$/.test(em) ? 'Emailul nu pare corect.' : DB.admins.some(a => a.email === em) ? 'Există deja un cont cu acest email.' : pw.length < 8 ? 'Parola trebuie să aibă minim 8 caractere.' : DB.admins.length >= 5 ? 'Poți avea cel mult 5 persoane în admin.' : '';
+        const bad = !n ? 'Scrie numele.' : !/^\S+@\S+\.\S+$/.test(em) ? 'Emailul nu pare corect.' : DB.admins.some(a => a.email.toLowerCase() === em) ? 'Există deja un cont cu acest email.' : pw.length < 8 ? 'Parola trebuie să aibă minim 8 caractere.' : DB.admins.length >= 5 ? 'Poți avea cel mult 5 persoane în admin.' : '';
         if (bad) { er.textContent = bad; er.hidden = false; return; } DB.admins.push({ name: n, email: em, pass: pw }); admSaved('Persoana a fost adăugată.'); };
     }
   };
   (V[admTab] || V.panou)();
 }
 
-/* formular lateral pentru espressor / piesă */
-function sheet(html, onMount) {
-  const m = document.createElement('div'); m.className = 'modal'; m.innerHTML = `<div class="sheet" role="dialog" aria-modal="true">${html}</div>`;
-  document.body.appendChild(m); document.body.style.overflow = 'hidden';
-  const close = () => { m.remove(); document.body.style.overflow = ''; removeEventListener('keydown', k); };
-  const k = e => { if (e.key === 'Escape') close(); }; addEventListener('keydown', k);
-  m.onclick = e => { if (e.target === m) close(); }; $$('[data-close]', m).forEach(b => b.onclick = close);
-  onMount(m, close); $('input,select,textarea', m)?.focus();
+/* fereastră de editare: pe telefon ocupă tot ecranul, cu butoanele mereu jos */
+function sheet({ title, body, foot = '', bottom = false }, onMount) {
+  const m = document.createElement('div'); m.className = 'modal' + (bottom ? ' bottom' : '');
+  m.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sh-t"><div class="sheet-head"><h2 id="sh-t" tabindex="-1">${title}</h2><button type="button" class="iconbtn" data-close>Închide ✕</button></div>
+    <div class="sheet-body">${body}</div>${foot ? `<div class="sheet-foot">${foot}</div>` : ''}</div>`;
+  document.body.appendChild(m); document.body.classList.add('lock');
+  let dirty = false; m.addEventListener('input', () => dirty = true);
+  const close = () => { m.remove(); document.body.classList.remove('lock'); removeEventListener('keydown', k); removeEventListener('hashchange', close); };
+  const tryClose = btn => { if (!dirty) return close(); if (btn) return confirmBtn(btn, close); toast('Ai modificări nesalvate. Salvează sau apasă „Închide” de două ori.'); };
+  const k = e => { if (e.key === 'Escape') tryClose(); };
+  addEventListener('keydown', k); addEventListener('hashchange', close);
+  m.onclick = e => { if (e.target === m) tryClose(); };
+  $('[data-close]', m).onclick = e => tryClose(e.currentTarget);
+  onMount(m, close); $('#sh-t', m).focus({ preventScroll: true });
 }
-const sel = (id, opts, v) => `<select id="${id}">${opts.map(o => `<option value="${o[0]}" ${String(v) === String(o[0]) ? 'selected' : ''}>${o[1]}</option>`).join('')}</select>`;
+const sel = (id, opts, v) => `<select id="${id}">${opts.map(o => `<option value="${esc(o[0])}" ${String(v) === String(o[0]) ? 'selected' : ''}>${esc(o[1])}</option>`).join('')}</select>`;
 const PT = [['fix', 'Preț fix'], ['de-la', 'Preț „de la”'], ['cerere', 'Preț la cerere']];
-function priceToggle(m) { const t = $('#x-pt', m), p = $('#x-price', m); const f = () => { p.disabled = t.value === 'cerere'; if (p.disabled) p.value = ''; }; t.onchange = f; f(); }
+function priceToggle(m) { const t = $('#x-pt', m), p = $('#x-price', m); const f = () => { p.disabled = t.value === 'cerere'; if (p.disabled) { p.value = ''; p.classList.remove('bad'); } }; t.addEventListener('change', f); f(); }
 function readImage(input, cb) {
   const f = input.files[0]; if (!f) return; if (!f.type.startsWith('image/')) return toast('Alege o imagine (JPG sau PNG).');
-  const r = new FileReader(); r.onload = () => { const im = new Image(); im.onload = () => {   // micșorăm poza ca să încapă în browser
-    const c = document.createElement('canvas'), s = Math.min(1, 1000 / Math.max(im.width, im.height)); c.width = im.width * s; c.height = im.height * s;
-    c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); cb(c.toDataURL('image/jpeg', .82)); }; im.src = r.result; }; r.readAsDataURL(f);
+  if (f.size > 15e6) return toast('Poza e prea mare. Alege una sub 15 MB.');
+  const r = new FileReader(); r.onerror = () => toast('Nu am putut citi poza. Încearcă alta.');
+  r.onload = () => { const im = new Image(); im.onerror = () => toast('Formatul pozei nu e suportat. Încearcă JPG sau PNG.');
+    im.onload = () => {   // micșorăm poza ca să încapă în browser
+      const c = document.createElement('canvas'), s = Math.min(1, 1000 / Math.max(im.width, im.height)); c.width = Math.round(im.width * s); c.height = Math.round(im.height * s);
+      const cx = c.getContext('2d'); cx.fillStyle = '#1c120c'; cx.fillRect(0, 0, c.width, c.height); cx.drawImage(im, 0, 0, c.width, c.height); cb(c.toDataURL('image/jpeg', .8)); input.value = ''; }; im.src = r.result; };
+  r.readAsDataURL(f);
 }
+function formFoot(isNew) { return `<button class="btn btn-primary" form="xf">${isNew ? 'Adaugă pe site' : 'Salvează'}</button>${isNew ? '' : '<button type="button" class="iconbtn" id="x-del">Șterge definitiv</button>'}`; }
+function uniqueSlug(name, list, self) { const base = slugify(name); let s = base, n = 2; while (list.some(x => x !== self && x.slug === s)) s = base + '-' + n++; return s; }
+
 function editMachine(i) {
-  const isNew = i == null, m = isNew ? { name: '', type: 'profesional', groups: 2, cond: 'Recondiționat', priceType: 'fix', price: '', status: 'activ', warranty: '12 luni', short: '', desc: '', specs: [], checked: [], img: 'p1.jpg' } : clone(DB.machines[i]);
-  sheet(`<div class="adm-top"><h1 style="font-size:30px">${isNew ? 'Espressor nou' : 'Modifică espressorul'}</h1><button class="iconbtn" data-close>Închide ✕</button></div>
-    <form id="mf" novalidate>
-    <div class="f"><label>Poza</label><div style="display:flex;gap:14px;align-items:center"><img id="x-prev" src="${imgSrc(m.img)}" alt="" style="width:120px;aspect-ratio:4/3;object-fit:cover;border-radius:10px;border:1px solid var(--line)">
-      <label class="btn btn-ghost btn-sm" style="cursor:pointer">Schimbă poza<input type="file" accept="image/*" id="x-img" hidden></label></div></div>
+  const isNew = i == null, m = isNew ? { name: '', type: 'profesional', groups: 2, cond: 'Recondiționat', priceType: 'fix', price: '', status: 'activ', warranty: '12 luni', short: '', desc: '', specs: [], checked: [], img: '' } : clone(DB.machines[i]);
+  sheet({ title: isNew ? 'Espressor nou' : 'Modifică espressorul', foot: formFoot(isNew), body: `<form id="xf" novalidate>
+    <div class="f"><label>Poza</label><div class="imgpick"><img id="x-prev" src="${m.img ? imgSrc(m.img) : ""}" alt="" ${m.img ? "" : "hidden"}>
+      <label class="btn btn-ghost btn-sm">Schimbă poza<input type="file" accept="image/*" id="x-img" class="sr"></label></div></div>
     <div class="f"><label for="x-name">Nume *</label><input id="x-name" value="${esc(m.name)}" placeholder="de exemplu, Espressor profesional cu 2 grupuri"></div>
-    <div class="f2"><div class="f"><label for="x-type">Tip</label>${sel('x-type', Object.entries(typeLabel), m.type)}</div><div class="f"><label for="x-groups">Grupuri</label><input id="x-groups" type="number" min="0" max="4" value="${m.groups}"></div></div>
-    <div class="f2"><div class="f"><label for="x-cond">Stare</label>${sel('x-cond', [['Recondiționat', 'Recondiționat'], ['Nou', 'Nou']], m.cond)}</div><div class="f"><label for="x-status">Status</label>${sel('x-status', [['activ', 'La vânzare'], ['ascuns', 'Ascuns'], ['vandut', 'Vândut']], m.status)}</div></div>
-    <div class="f2"><div class="f"><label for="x-pt">Tip preț</label>${sel('x-pt', PT, m.priceType)}</div><div class="f"><label for="x-price">Preț (lei)</label><input id="x-price" type="number" min="0" value="${m.price ?? ''}"></div></div>
-    <div class="f"><label for="x-war">Garanție</label><input id="x-war" value="${esc(m.warranty)}"></div>
+    <div class="f2"><div class="f"><label for="x-status">Pe site</label>${sel('x-status', Object.entries(STATUS_M), m.status)}</div><div class="f"><label for="x-cond">Stare</label>${sel('x-cond', [['Recondiționat', 'Recondiționat'], ['Nou', 'Nou']], m.cond)}</div></div>
+    <div class="f2"><div class="f"><label for="x-pt">Tip preț</label>${sel('x-pt', PT, m.priceType)}</div><div class="f"><label for="x-price">Preț (lei)</label><input id="x-price" type="text" inputmode="decimal" value="${m.price ?? ''}"></div></div>
+    <div class="f2"><div class="f"><label for="x-type">Tip aparat</label>${sel('x-type', Object.entries(typeLabel), m.type)}</div><div class="f"><label for="x-groups">Grupuri</label>${sel('x-groups', [[0, '—'], [1, '1'], [2, '2'], [3, '3'], [4, '4']], m.groups)}</div></div>
+    <div class="f"><label for="x-war">Garanție</label><input id="x-war" value="${esc(m.warranty)}" placeholder="de exemplu, 12 luni"></div>
     <div class="f"><label for="x-short">O frază scurtă (apare pe card)</label><input id="x-short" value="${esc(m.short)}" maxlength="120"></div>
     <div class="f"><label for="x-desc">Povestea aparatului</label><textarea id="x-desc" rows="4">${esc(m.desc)}</textarea></div>
-    <div class="f"><label for="x-checked">Ce am făcut la el (câte una pe rând)</label><textarea id="x-checked" rows="4">${esc(m.checked.join('\n'))}</textarea></div>
-    <div class="f"><label for="x-specs">Detalii tehnice (câte una pe rând, „Denumire: valoare”)</label><textarea id="x-specs" rows="4">${esc(m.specs.map(s => s.join(': ')).join('\n'))}</textarea></div>
-    <p class="err" id="x-err" hidden></p>
-    <div style="display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;margin-top:10px"><button class="btn btn-primary">${isNew ? 'Adaugă pe site' : 'Salvează'}</button>${isNew ? '' : '<button type="button" class="iconbtn" id="x-del">Șterge definitiv</button>'}</div></form>`,
+    <div class="f"><label for="x-checked">Ce am făcut la el <span class="muted">(câte una pe rând)</span></label><textarea id="x-checked" rows="4">${esc(m.checked.join('\n'))}</textarea></div>
+    <div class="f"><label for="x-specs">Detalii tehnice <span class="muted">(câte una pe rând, „Denumire: valoare”)</span></label><textarea id="x-specs" rows="4">${esc(m.specs.map(s => s.join(': ')).join('\n'))}</textarea></div>
+    <p class="err" id="x-err" hidden></p></form>` },
   (M, close) => {
     priceToggle(M);
-    $('#x-img', M).onchange = e => readImage(e.target, d => { m.img = d; $('#x-prev', M).src = d; });
-    if (!isNew) $('#x-del', M).onclick = e => confirmBtn(e.target, () => { DB.machines.splice(i, 1); close(); admSaved('Espressor șters.'); });
-    $('#mf', M).onsubmit = e => {
-      e.preventDefault(); const g = id => $('#' + id, M).value.trim(); const er = $('#x-err', M);
-      if (!g('x-name')) { er.textContent = 'Scrie numele aparatului.'; er.hidden = false; $('#x-name', M).classList.add('bad'); return; }
-      if (g('x-pt') !== 'cerere' && !(+g('x-price') > 0)) { er.textContent = 'Pune un preț sau alege „Preț la cerere”.'; er.hidden = false; $('#x-price', M).classList.add('bad'); return; }
-      Object.assign(m, { name: g('x-name'), type: g('x-type'), groups: +g('x-groups') || 0, cond: g('x-cond'), status: g('x-status'), priceType: g('x-pt'), price: g('x-pt') === 'cerere' ? null : +g('x-price'),
-        warranty: g('x-war'), short: g('x-short'), desc: g('x-desc'), checked: g('x-checked').split('\n').map(s => s.trim()).filter(Boolean),
+    $('#x-img', M).onchange = e => readImage(e.target, d => { m.img = d; $('#x-prev', M).src = d; $('#x-prev', M).hidden = false; M.dispatchEvent(new Event('input')); });
+    if (!isNew) $('#x-del', M).onclick = e => confirmBtn(e.currentTarget, () => { DB.machines.splice(i, 1); close(); admSaved('Espressor șters.'); });
+    $('#xf', M).onsubmit = e => {
+      e.preventDefault(); const g = id => $('#' + id, M).value.trim(), er = $('#x-err', M), bad = (id, msg) => { er.textContent = msg; er.hidden = false; $('#' + id, M).classList.add('bad'); $('#' + id, M).focus(); };
+      $$('.bad', M).forEach(x => x.classList.remove('bad'));
+      if (!g('x-name')) return bad('x-name', 'Scrie numele aparatului.');
+      if (g('x-pt') !== 'cerere' && !(num(g('x-price')) > 0)) return bad('x-price', 'Pune un preț sau alege „Preț la cerere”.');
+      Object.assign(m, { name: g('x-name'), type: g('x-type'), groups: +g('x-groups') || 0, cond: g('x-cond'), status: g('x-status'), priceType: g('x-pt'), price: g('x-pt') === 'cerere' ? null : num(g('x-price')),
+        warranty: g('x-war') || '—', short: g('x-short'), desc: g('x-desc'), checked: g('x-checked').split('\n').map(s => s.trim()).filter(Boolean),
         specs: g('x-specs').split('\n').map(s => s.split(':')).filter(a => a[0].trim()).map(a => [a[0].trim(), a.slice(1).join(':').trim()]) });
-      if (isNew) { let s = slugify(m.name), n = 2; while (DB.machines.some(x => x.slug === s)) s = slugify(m.name) + '-' + n++; m.slug = s; DB.machines.unshift(m); } else DB.machines[i] = m;
+      if (isNew) { m.slug = uniqueSlug(m.name, DB.machines); DB.machines.unshift(m); } else DB.machines[i] = m;
+      if (!save.ok) { if (isNew) DB.machines.shift(); return bad('x-name', 'Nu am putut salva. Poza e prea mare pentru browser; încearcă una mai mică.'); }
       close(); admSaved(isNew ? 'Espressorul a fost adăugat pe site.' : undefined);
     };
   });
 }
 function editPart(i) {
-  const isNew = i == null, p = isNew ? { name: '', code: '', cat: DB.partCats[0], compat: [], priceType: 'fix', price: '', stock: 'stoc', note: '', status: 'activ' } : clone(DB.parts[i]);
-  sheet(`<div class="adm-top"><h1 style="font-size:30px">${isNew ? 'Piesă nouă' : 'Modifică piesa'}</h1><button class="iconbtn" data-close>Închide ✕</button></div>
-    <form id="pf" novalidate>
-    <div class="f"><label>Poza piesei</label><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div id="x-prev" class="th pth" style="width:120px;height:90px;border-radius:10px">${partThumb(p)}</div>
-      <label class="btn btn-ghost btn-sm" style="cursor:pointer">${p.img ? 'Schimbă poza' : 'Adaugă o poză'}<input type="file" accept="image/*" id="x-img" hidden></label>
+  const isNew = i == null, p = isNew ? { name: '', code: '', cat: DB.partCats[0] || 'Altele', compat: [], priceType: 'fix', price: '', stock: 'stoc', note: '', status: 'activ' } : clone(DB.parts[i]);
+  const cats = DB.partCats.includes(p.cat) ? DB.partCats : [...DB.partCats, p.cat];
+  sheet({ title: isNew ? 'Piesă nouă' : 'Modifică piesa', foot: formFoot(isNew), body: `<form id="xf" novalidate>
+    <div class="f"><label>Poza piesei</label><div class="imgpick"><span id="x-prev" class="pth">${partThumb(p)}</span>
+      <label class="btn btn-ghost btn-sm">${p.img ? 'Schimbă poza' : 'Adaugă o poză'}<input type="file" accept="image/*" id="x-img" class="sr"></label>
       <button type="button" class="iconbtn" id="x-noimg" ${p.img ? '' : 'hidden'}>Scoate poza</button></div>
-      <p class="muted" style="font-size:12.5px;margin:8px 0 0">Fără poză, pe site apare iconița categoriei. Merge orice JPG sau PNG; o micșorăm automat.</p></div>
+      <p class="muted" style="font-size:13px;margin:8px 0 0">Fără poză, pe site apare iconița categoriei. O micșorăm automat.</p></div>
     <div class="f"><label for="x-name">Nume *</label><input id="x-name" value="${esc(p.name)}"></div>
-    <div class="f2"><div class="f"><label for="x-code">Cod piesă</label><input id="x-code" value="${esc(p.code)}"></div><div class="f"><label for="x-cat">Categorie</label>${sel('x-cat', DB.partCats.map(c => [c, c]), p.cat)}</div></div>
-    <div class="f2"><div class="f"><label for="x-pt">Tip preț</label>${sel('x-pt', PT, p.priceType)}</div><div class="f"><label for="x-price">Preț (lei)</label><input id="x-price" type="number" min="0" value="${p.price ?? ''}"></div></div>
+    <div class="f2"><div class="f"><label for="x-code">Cod piesă</label><input id="x-code" value="${esc(p.code)}" autocapitalize="characters"></div><div class="f"><label for="x-cat">Categorie</label>${sel('x-cat', cats.map(c => [c, c]), p.cat)}</div></div>
+    <div class="f2"><div class="f"><label for="x-pt">Tip preț</label>${sel('x-pt', PT, p.priceType)}</div><div class="f"><label for="x-price">Preț (lei)</label><input id="x-price" type="text" inputmode="decimal" value="${p.price ?? ''}"></div></div>
     <div class="f2"><div class="f"><label for="x-stock">Stoc</label>${sel('x-stock', Object.entries(stockLabel).map(([k, l]) => [k, l.split(',')[0]]), p.stock)}</div><div class="f"><label for="x-status">Pe site</label>${sel('x-status', [['activ', 'Vizibilă'], ['ascuns', 'Ascunsă']], p.status || 'activ')}</div></div>
-    <div class="f"><label for="x-compat">Se potrivește la (câte una pe rând)</label><textarea id="x-compat" rows="3">${esc(p.compat.join('\n'))}</textarea></div>
-    <div class="f"><label for="x-note">Sfat pentru client (opțional)</label><textarea id="x-note" rows="2">${esc(p.note || '')}</textarea></div>
-    <p class="err" id="x-err" hidden></p>
-    <div style="display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;margin-top:10px"><button class="btn btn-primary">${isNew ? 'Adaugă pe site' : 'Salvează'}</button>${isNew ? '' : '<button type="button" class="iconbtn" id="x-del">Șterge definitiv</button>'}</div></form>`,
+    <div class="f"><label for="x-compat">Se potrivește la <span class="muted">(câte una pe rând)</span></label><textarea id="x-compat" rows="3">${esc(p.compat.join('\n'))}</textarea></div>
+    <div class="f"><label for="x-note">Sfat pentru client <span class="muted">(opțional)</span></label><textarea id="x-note" rows="2">${esc(p.note || '')}</textarea></div>
+    <p class="err" id="x-err" hidden></p></form>` },
   (M, close) => {
     priceToggle(M);
     const prev = $('#x-prev', M), noimg = $('#x-noimg', M);
-    $('#x-img', M).onchange = e => readImage(e.target, d => { p.img = d; prev.innerHTML = `<img src="${d}" alt="">`; noimg.hidden = false; });
-    noimg.onclick = () => { delete p.img; prev.innerHTML = partIcon($('#x-cat', M).value); noimg.hidden = true; };
-    $('#x-cat', M).onchange = e => { if (!p.img) prev.innerHTML = partIcon(e.target.value); };
-    if (!isNew) $('#x-del', M).onclick = e => confirmBtn(e.target, () => { DB.parts.splice(i, 1); close(); admSaved('Piesă ștearsă.'); });
-    $('#pf', M).onsubmit = e => {
-      e.preventDefault(); const g = id => $('#' + id, M).value.trim(); const er = $('#x-err', M);
-      if (!g('x-name')) { er.textContent = 'Scrie numele piesei.'; er.hidden = false; $('#x-name', M).classList.add('bad'); return; }
-      if (g('x-pt') !== 'cerere' && !(+g('x-price') > 0)) { er.textContent = 'Pune un preț sau alege „Preț la cerere”.'; er.hidden = false; $('#x-price', M).classList.add('bad'); return; }
-      Object.assign(p, { name: g('x-name'), code: g('x-code'), cat: g('x-cat'), priceType: g('x-pt'), price: g('x-pt') === 'cerere' ? null : +g('x-price'), stock: g('x-stock'), status: g('x-status'),
+    $('#x-img', M).onchange = e => readImage(e.target, d => { p.img = d; prev.innerHTML = `<img src="${d}" alt="">`; noimg.hidden = false; M.dispatchEvent(new Event('input')); });
+    noimg.onclick = () => { delete p.img; prev.innerHTML = partIcon($('#x-cat', M).value); noimg.hidden = true; M.dispatchEvent(new Event('input')); };
+    $('#x-cat', M).addEventListener('change', e => { if (!p.img) prev.innerHTML = partIcon(e.target.value); });
+    if (!isNew) $('#x-del', M).onclick = e => confirmBtn(e.currentTarget, () => { DB.parts.splice(i, 1); close(); admSaved('Piesă ștearsă.'); });
+    $('#xf', M).onsubmit = e => {
+      e.preventDefault(); const g = id => $('#' + id, M).value.trim(), er = $('#x-err', M), bad = (id, msg) => { er.textContent = msg; er.hidden = false; $('#' + id, M).classList.add('bad'); $('#' + id, M).focus(); };
+      $$('.bad', M).forEach(x => x.classList.remove('bad'));
+      if (!g('x-name')) return bad('x-name', 'Scrie numele piesei.');
+      if (g('x-pt') !== 'cerere' && !(num(g('x-price')) > 0)) return bad('x-price', 'Pune un preț sau alege „Preț la cerere”.');
+      Object.assign(p, { name: g('x-name'), code: g('x-code'), cat: g('x-cat'), priceType: g('x-pt'), price: g('x-pt') === 'cerere' ? null : num(g('x-price')), stock: g('x-stock'), status: g('x-status'),
         compat: g('x-compat').split('\n').map(s => s.trim()).filter(Boolean), note: g('x-note') });
-      if (isNew) { let s = slugify(p.name), n = 2; while (DB.parts.some(x => x.slug === s)) s = slugify(p.name) + '-' + n++; p.slug = s; DB.parts.unshift(p); } else DB.parts[i] = p;
+      if (!p.compat.length) p.compat = ['întreabă-ne pentru modelul tău'];
+      if (isNew) { p.slug = uniqueSlug(p.name, DB.parts); DB.parts.unshift(p); } else DB.parts[i] = p;
+      if (!save.ok) { if (isNew) DB.parts.shift(); return bad('x-name', 'Nu am putut salva. Poza e prea mare pentru browser; încearcă una mai mică.'); }
       close(); admSaved(isNew ? 'Piesa a fost adăugată pe site.' : undefined);
     };
   });
@@ -703,27 +809,33 @@ function reveal() {
   $$('.rv:not(.in)').forEach(el => io.observe(el));
 }
 function render() {
+  if (admDirty && document.body.classList.contains('is-admin')) leaveOk();
   cleanups.forEach(f => f()); cleanups = []; toggleDrawer(false);
   const raw = location.hash.slice(1) || '/', [path, qs] = raw.split('?'), q = new URLSearchParams(qs || '');
   let page; for (const [re, fn] of ROUTES) { const m = path.match(re); if (m) { page = fn(m.slice(1), q); break; } }
   page = page || pgNotFound();
   const adminMode = !!page.admin; document.body.classList.toggle('is-admin', adminMode);
-  ['#topbar', '#footer', '#fab', '#mbar'].forEach(s => $(s).hidden = adminMode);
-  $('#app').innerHTML = page.html; document.title = (page.title ? page.title + ' · ' : '') + 'Espressoare Premium';
+  ['#topbar', '#hdr', '#footer', '#fab', '#mbar'].forEach(s => $(s).hidden = adminMode);
+  if (!adminMode) admDirty = null;
+  const app = $('#app'); app.classList.remove('enter'); app.innerHTML = page.html; void app.offsetWidth; app.classList.add('enter'); prog.style.setProperty('--p', 0); document.title = (page.title ? page.title + ' · ' : '') + 'Espressoare Premium';
   $('#hdr').classList.toggle('solid', path !== '/');
   $$('[data-nav]').forEach(a => a.classList.toggle('active', path.startsWith(a.dataset.nav.slice(1)) && path !== '/'));
   scrollTo(0, 0); page.mount?.(); reveal();
   $$('.card').forEach(c => c.addEventListener('pointermove', e => { const r = c.getBoundingClientRect(); c.style.setProperty('--mx', e.clientX - r.left + 'px'); c.style.setProperty('--my', e.clientY - r.top + 'px'); }));
-  if (render.pendingScroll) { const el = document.getElementById(render.pendingScroll); render.pendingScroll = null; el && setTimeout(() => el.scrollIntoView({ behavior: 'smooth' }), 60); }
+  const ps = render.pendingScroll; render.pendingScroll = null;
+  if (ps) { const el = document.getElementById(ps); el && setTimeout(() => el.scrollIntoView({ behavior: 'smooth' }), 60); }
 }
 document.addEventListener('click', e => {
+  if (e.target.closest('.skip')) { e.preventDefault(); $('#app').focus(); return; }
   const s = e.target.closest('[data-scroll]'); if (s) render.pendingScroll = s.dataset.scroll;
   // link spre pagina pe care ești deja: browserul nu schimbă nimic, așa că o redesenăm noi (resetează filtrele, urcă sus, închide meniul)
   const a = e.target.closest('a[href^="#/"]');
   if (a && !a.target && !e.ctrlKey && !e.metaKey && a.getAttribute('href') === (location.hash || '#/')) { e.preventDefault(); render(); }
 });
 addEventListener('hashchange', render);
-addEventListener('scroll', () => $('#hdr').classList.toggle('scrolled', scrollY > 20), { passive: true });
+const prog = $('#progress');
+addEventListener('scroll', () => { $('#hdr').classList.toggle('scrolled', scrollY > 20);
+  const max = document.documentElement.scrollHeight - innerHeight; prog.style.setProperty('--p', max > 0 ? Math.min(scrollY / max, 1) : 0); }, { passive: true });
 addEventListener('keydown', e => { if (e.key === 'Escape') toggleDrawer(false); });
 renderChrome(); render();
 })();
