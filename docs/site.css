@@ -350,6 +350,7 @@ footer{border-top:1px solid var(--line);padding:70px 0 28px;margin-top:20px}
 .stat b{display:block;font:300 34px var(--serif);color:var(--crema)}
 
 /* responsive */
+@media (min-width:1021px) and (max-width:1320px){.hero-bg img{width:58%}.hero .in{max-width:500px}}
 @media (max-width:1020px){
   .menu,.nav-cta .hide-m{display:none}.burger{display:inline-flex;align-items:center;justify-content:center}
   .grid4,.hlist{grid-template-columns:1fr 1fr}

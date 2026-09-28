@@ -716,7 +716,12 @@ function render() {
   $$('.card').forEach(c => c.addEventListener('pointermove', e => { const r = c.getBoundingClientRect(); c.style.setProperty('--mx', e.clientX - r.left + 'px'); c.style.setProperty('--my', e.clientY - r.top + 'px'); }));
   if (render.pendingScroll) { const el = document.getElementById(render.pendingScroll); render.pendingScroll = null; el && setTimeout(() => el.scrollIntoView({ behavior: 'smooth' }), 60); }
 }
-document.addEventListener('click', e => { const a = e.target.closest('[data-scroll]'); if (a) render.pendingScroll = a.dataset.scroll; });
+document.addEventListener('click', e => {
+  const s = e.target.closest('[data-scroll]'); if (s) render.pendingScroll = s.dataset.scroll;
+  // link spre pagina pe care ești deja: browserul nu schimbă nimic, așa că o redesenăm noi (resetează filtrele, urcă sus, închide meniul)
+  const a = e.target.closest('a[href^="#/"]');
+  if (a && !a.target && !e.ctrlKey && !e.metaKey && a.getAttribute('href') === (location.hash || '#/')) { e.preventDefault(); render(); }
+});
 addEventListener('hashchange', render);
 addEventListener('scroll', () => $('#hdr').classList.toggle('scrolled', scrollY > 20), { passive: true });
 addEventListener('keydown', e => { if (e.key === 'Escape') toggleDrawer(false); });
